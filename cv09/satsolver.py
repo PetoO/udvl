@@ -1,6 +1,7 @@
 #! /bin/env python3
 import sys
 
+sys.setrecursionlimit(2048)
 
 # helper function for 'nice' level dependent logging
 logLevel = 0
@@ -107,10 +108,27 @@ class Clause(list):
         Returns True if it found a new lit (or if old is ok),
         False if there is no other acceptable literal (old won't be changed).
         """
-        # TODO
-        pass
+        if self.watched[0] == old:
+            wi = 0
+            other = self.watched[1]
+        elif self.watched[1]== old:
+            wi = 1
+            other = self.watched[0]
+        else:
+            raise Exception("Bit a watched literal %s" %old)
 
+        for lit in self:
+            if lit == other:
+                continue #preskocime na druhy watched
+            if not lit.isSet():
+                self.setWatch(wi,lit)
+                return True
+            if lit.isTrue():
+                self.setWatch(wi,lit)
+                return True
 
+        return False
+            
 class Solver:
     class InputError(Exception):
         pass
@@ -143,10 +161,8 @@ class Solver:
             for line in ifile:
                 line = line.strip()
                 if line[0] == 'c':
-                    # comment
                     continue
                 if line[0] == 'p':
-                    # header
                     h = line.split()
                     if h[0] != 'p' or h[1] != 'cnf':
                         raise self.InputError('bad header')
@@ -205,12 +221,104 @@ class Solver:
                 log('UNSAT')
                 of.write('UNSAT\n')
 
+    def chooseBranchLit(self):
+        for var in self.vars.values():
+            if not var.isSet:
+                return var.lit[True]
+        raise Exception("All vars are set already")
 
+    def initWatched(self):
+        self.unitLiterals = []
+        for c in self.clauses:
+            if len(c) == 0 :
+                return False 
+            elif len(c) == 1:
+                c.setWatch(0,c[0])
+                c.setWatch(1,c[0])
+                self.unitLiterals.append(c[0])
+            else:
+                c.setWatch(0,c[0])
+                c.setWatch(1,c[1])
+                if not c.findNewWatch(c[1]):
+                    self.unitLiterals.append(c[0])
+                    
+                    
+        return True
+    
+    def setLiteral(self,lit):
+
+        ''' nastavi lit na true, poriesi ak je lit
+        niekde watched....vrati false,ak sme nieco spravili nesplnitelnym'''
+        if lit.isSet():
+            return lit.isTrue()
+        
+        lit.setTrue()
+        self.assignedLits.append(lit)
+        
+        negLit = lit.neg
+        for c in negLit.watchedIn[:]:
+            if not c.findNewWatch(negLit):
+                if c.watched[0] == negLit:
+                    other = c.watched[1]
+                elif c.watched[1] == negLit:
+                    other = c.watched[0]
+                else:
+                    raise Exception("Bad watched literal")
+
+
+                if other.isSet() and not other.isTrue():
+                    #conflict
+                    return False
+
+                if not other.isSet():
+                    self.unitLiterals.append(other)
+
+        
+        return True
+
+                
+    def unitPropagate(self):
+        while self.unitLiterals:
+             lit = self.unitLiterals.pop()
+             if not self.setLiteral(lit):
+                 return False
+        return True
+
+    def backtrack(self,where):
+        while len(self.assignedLits)> where:
+            lit = self.assignedLits.pop()
+            lit.unset()
+            
+             
+
+    def dpll(self):
+        if len(self.assignedLits) == self.nVars:
+            return True
+
+        branchLiteral = self.chooseBranchLit()
+        for l in [ branchLiteral, branchLiteral.neg] :
+            assigned = len(self.assignedLits)
+            self.unitLiterals = []
+            sat = False
+            if self.setLiteral(l):
+                if self.unitPropagate():
+                    if self.dpll():
+                        return True
+            self.backtrack(assigned)
+
+        return False
+            
+
+        
 
     def solve(self, ifName, ofName):
         self.read(ifName)
-        # TODO
         sat = False
+        self.assignedLits = []
+        if self.initWatched():
+            if self.unitPropagate():
+                sat = self.dpll()            
+            
         self.write(ofName, sat)
 
 
@@ -218,7 +326,7 @@ class Solver:
 if __name__ == "__main__":
     import sys
     s = Solver()
-    ifName = '-'
+    ifName = 'testData/normal/sat/300-flat100-22.cnf '
     ofName = '-'
     if len(sys.argv) >= 2:
         ifName = sys.argv[1]
